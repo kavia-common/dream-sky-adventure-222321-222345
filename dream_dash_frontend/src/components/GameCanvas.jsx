@@ -4,8 +4,9 @@ import { useEffect, useRef } from "react";
  * PUBLIC_INTERFACE
  * GameCanvas
  * A canvas-based mini game loop rendering a player with clouds, stars, and storms.
- * - Press Space to jump. AI controls storms and wind.
- * - This component sets up requestAnimationFrame and keyboard listeners with cleanup.
+ * - Controls: ArrowLeft/ArrowRight for horizontal move (hold for continuous), ArrowUp to jump/ascend, ArrowDown for quick drop.
+ * - Prevents default scrolling for arrow keys.
+ * - Cleans up listeners and timeouts on unmount.
  */
 export default function GameCanvas({ onScore }) {
   const canvasRef = useRef(null);
@@ -31,7 +32,15 @@ export default function GameCanvas({ onScore }) {
       gravity: 0.8,
       jumpPower: -12,
       grounded: true,
+      speed: 2.5, // base horizontal speed for arrow keys
+      maxX: W - 30,
+      minX: 0,
+      ceilingY: 10, // soft ceiling to avoid flying off screen
     };
+
+    // ----- INPUT STATE -----
+    const pressed = new Set();
+    let lastDownImpulseAt = 0; // rate limit down impulses
 
     // ----- ENVIRONMENT -----
     let stars = [];
@@ -175,6 +184,62 @@ export default function GameCanvas({ onScore }) {
       }
     }
 
+    // ----- INPUT HANDLERS -----
+    const preventArrowDefaults = (e) => {
+      // Prevent page scrolling when using arrow keys
+      if (
+        e.key === "ArrowUp" ||
+        e.key === "ArrowDown" ||
+        e.key === "ArrowLeft" ||
+        e.key === "ArrowRight"
+      ) {
+        e.preventDefault();
+      }
+    };
+
+    const onKeyDown = (e) => {
+      preventArrowDefaults(e);
+      // pressed set for continuous movement
+      if (
+        e.key === "ArrowLeft" ||
+        e.key === "ArrowRight" ||
+        e.key === "ArrowUp" ||
+        e.key === "ArrowDown"
+      ) {
+        pressed.add(e.key);
+      }
+
+      // handle jump/ascend on keydown
+      if (e.key === "ArrowUp") {
+        if (player.grounded) {
+          player.vy = player.jumpPower; // jump from ground
+          player.grounded = false;
+        } else {
+          // small ascend impulse when in air to feel responsive (clamped)
+          player.vy += -0.8;
+        }
+      }
+
+      // quick drop impulse with simple rate limit (every 120ms)
+      if (e.key === "ArrowDown") {
+        const now = Date.now();
+        if (now - lastDownImpulseAt > 120) {
+          player.vy += 3.2; // nudge downwards
+          lastDownImpulseAt = now;
+        }
+      }
+    };
+
+    const onKeyUp = (e) => {
+      preventArrowDefaults(e);
+      if (pressed.has(e.key)) {
+        pressed.delete(e.key);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown, { passive: false });
+    window.addEventListener("keyup", onKeyUp, { passive: false });
+
     // ----- GAME LOOP -----
     function update() {
       ctx.clearRect(0, 0, W, H);
@@ -185,16 +250,39 @@ export default function GameCanvas({ onScore }) {
       drawStars();
       drawStorms();
 
+      // Horizontal movement from keys (continuous while held)
+      if (pressed.has("ArrowLeft")) {
+        player.x -= player.speed;
+      }
+      if (pressed.has("ArrowRight")) {
+        player.x += player.speed;
+      }
+      // clamp X within bounds
+      if (player.x < player.minX) player.x = player.minX;
+      if (player.x > player.maxX) player.x = player.maxX;
+
       // Apply gravity + wind to player
       player.vy += player.gravity;
       player.y += player.vy;
       player.x += windForce;
+
+      // clamp wind-adjusted X again
+      if (player.x < player.minX) player.x = player.minX;
+      if (player.x > player.maxX) player.x = player.maxX;
+
+      // ceiling clamp (avoid flying off top)
+      if (player.y < player.ceilingY) {
+        player.y = player.ceilingY;
+        if (player.vy < 0) player.vy = 0;
+      }
 
       // ground
       if (player.y + player.size > 280) {
         player.y = 280 - player.size;
         player.vy = 0;
         player.grounded = true;
+      } else {
+        player.grounded = false;
       }
 
       // star collisions (+score + respawn)
@@ -207,15 +295,6 @@ export default function GameCanvas({ onScore }) {
 
       rafRef.current = requestAnimationFrame(update);
     }
-
-    // ----- INPUT: JUMP -----
-    const onKeyDown = (e) => {
-      if (e.code === "Space" && player.grounded) {
-        player.vy = player.jumpPower;
-        player.grounded = false;
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
 
     // Initial setup
     for (let i = 0; i < 8; i++) {
@@ -241,6 +320,7 @@ export default function GameCanvas({ onScore }) {
     // Cleanup on unmount
     return () => {
       window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       if (windTimeoutRef.current) {
         clearTimeout(windTimeoutRef.current);
@@ -250,6 +330,7 @@ export default function GameCanvas({ onScore }) {
         clearTimeout(flashTimeoutRef.current);
         flashTimeoutRef.current = null;
       }
+      pressed.clear();
       // Clear references
       stars = [];
       clouds = [];
