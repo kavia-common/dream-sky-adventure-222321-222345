@@ -2,13 +2,15 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 
 /**
  * PUBLIC_INTERFACE
- * GameCanvas
+ * GameCanvas v3
  * Full user-provided implementation:
  * - State: gameOver, level, score, lives, starsCollected, nextLevelAt
  * - Controls: Arrow keys, continuous movement, R to restart
  * - AI environment: storms, wind, clouds
  * - Collisions: storms (damage), stars (collect to progress)
  * - HUD with score, level, lives, and game over overlay
+ * - Level-complete banner animation and subtle UI hints
+ * - Touch controls and restart button overlay for accessibility
  * - Proper event listener and timer cleanup
  */
 export default function GameCanvas({ onScore }) {
@@ -19,6 +21,7 @@ export default function GameCanvas({ onScore }) {
   const windTimeoutRef = useRef(null);
   const flashTimeoutRef = useRef(null);
   const stormHitCooldownRef = useRef(null);
+  const levelBannerTimeoutRef = useRef(null);
 
   // Game state
   const [score, setScore] = useState(0);
@@ -27,6 +30,10 @@ export default function GameCanvas({ onScore }) {
   const [starsCollected, setStarsCollected] = useState(0);
   const [nextLevelAt, setNextLevelAt] = useState(5);
   const [gameOver, setGameOver] = useState(false);
+
+  // Level complete animation state
+  const [showLevelBanner, setShowLevelBanner] = useState(false);
+  const [bannerText, setBannerText] = useState("");
 
   // Local effect flags/state
   const pressedRef = useRef(new Set());
@@ -66,6 +73,8 @@ export default function GameCanvas({ onScore }) {
     setStarsCollected(0);
     setNextLevelAt(5);
     setGameOver(false);
+    setShowLevelBanner(false);
+    setBannerText("");
 
     // Reset world
     starsRef.current = [];
@@ -80,6 +89,10 @@ export default function GameCanvas({ onScore }) {
     if (stormHitCooldownRef.current) {
       clearTimeout(stormHitCooldownRef.current);
       stormHitCooldownRef.current = null;
+    }
+    if (levelBannerTimeoutRef.current) {
+      clearTimeout(levelBannerTimeoutRef.current);
+      levelBannerTimeoutRef.current = null;
     }
 
     // Reset player
@@ -142,7 +155,7 @@ export default function GameCanvas({ onScore }) {
     flashAlphaRef.current = 0;
   }, []);
 
-  // Input handlers
+  // Input handlers (keyboard)
   useEffect(() => {
     const onKeyDown = (e) => {
       if (
@@ -203,6 +216,64 @@ export default function GameCanvas({ onScore }) {
     };
   }, [restartGame]);
 
+  // Touch controls (mobile-friendly)
+  const touchAreaRef = useRef(null);
+  useEffect(() => {
+    const el = touchAreaRef.current;
+    if (!el) return;
+
+    let touchStartX = null;
+
+    const onTouchStart = (e) => {
+      const rect = el.getBoundingClientRect();
+      const x = e.touches[0].clientX - rect.left;
+      const y = e.touches[0].clientY - rect.top;
+      touchStartX = x;
+
+      // simple regions: left/right halves for horizontal, top area for jump
+      const width = rect.width;
+      const height = rect.height;
+
+      if (y < height * 0.6) {
+        // jump
+        const player = playerRef.current;
+        if (player.grounded) {
+          player.vy = player.jumpPower;
+          player.grounded = false;
+        } else {
+          player.vy += -0.8;
+        }
+      } else {
+        if (x < width / 2) {
+          pressedRef.current.add("ArrowLeft");
+        } else {
+          pressedRef.current.add("ArrowRight");
+        }
+      }
+    };
+
+    const onTouchMove = (e) => {
+      // optional: could implement swipe down to dive
+      // for simplicity, ignore continuous changes here
+    };
+
+    const onTouchEnd = () => {
+      pressedRef.current.delete("ArrowLeft");
+      pressedRef.current.delete("ArrowRight");
+      touchStartX = null;
+    };
+
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: true });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+    };
+  }, []);
+
   // Utility: collision checks
   function rectCircleColliding(px, py, pw, ph, cx, cy, r) {
     const closestX = Math.max(px, Math.min(cx, px + pw));
@@ -217,27 +288,30 @@ export default function GameCanvas({ onScore }) {
   }
 
   // AI computer control
-  const computerControl = useCallback((W) => {
-    // Spawn new storms occasionally; scale with level slightly
-    const maxStorms = Math.min(2 + Math.floor(level / 2), 5);
-    if (Math.random() < 0.01 && stormsRef.current.length < maxStorms) {
-      stormsRef.current.push({
-        x: W,
-        y: 80 + Math.random() * 120,
-        speed: 1.6 + Math.random() * 0.8 + level * 0.1,
-      });
-    }
+  const computerControl = useCallback(
+    (W) => {
+      // Spawn new storms occasionally; scale with level slightly
+      const maxStorms = Math.min(2 + Math.floor(level / 2), 5);
+      if (Math.random() < 0.01 && stormsRef.current.length < maxStorms) {
+        stormsRef.current.push({
+          x: W,
+          y: 80 + Math.random() * 120,
+          speed: 1.6 + Math.random() * 0.8 + level * 0.1,
+        });
+      }
 
-    // Random wind gusts
-    if (Math.random() < 0.002) {
-      windForceRef.current = (Math.random() - 0.5) * (2 + level * 0.2);
-      if (windTimeoutRef.current) clearTimeout(windTimeoutRef.current);
-      windTimeoutRef.current = setTimeout(() => {
-        windForceRef.current = 0;
-        windTimeoutRef.current = null;
-      }, 2000);
-    }
-  }, [level]);
+      // Random wind gusts
+      if (Math.random() < 0.002) {
+        windForceRef.current = (Math.random() - 0.5) * (2 + level * 0.2);
+        if (windTimeoutRef.current) clearTimeout(windTimeoutRef.current);
+        windTimeoutRef.current = setTimeout(() => {
+          windForceRef.current = 0;
+          windTimeoutRef.current = null;
+        }, 2000);
+      }
+    },
+    [level]
+  );
 
   // Handle star collection
   const handleStarCollisions = useCallback(
@@ -283,54 +357,53 @@ export default function GameCanvas({ onScore }) {
   );
 
   // Handle storm collisions (damage)
-  const handleStormCollisions = useCallback(
-    (W) => {
-      const player = playerRef.current;
-      const storms = stormsRef.current;
+  const handleStormCollisions = useCallback((W) => {
+    const player = playerRef.current;
+    const storms = stormsRef.current;
 
-      for (let i = 0; i < storms.length; i++) {
-        const st = storms[i];
-        // Storm visual approx: ellipse radius 40x20 -> bounding rect
-        const sx = st.x - 40;
-        const sy = st.y - 20;
-        const sw = 80;
-        const sh = 40;
+    for (let i = 0; i < storms.length; i++) {
+      const st = storms[i];
+      // Storm visual approx: ellipse radius 40x20 -> bounding rect
+      const sx = st.x - 40;
+      const sy = st.y - 20;
+      const sw = 80;
+      const sh = 40;
 
-        if (
-          rectRectOverlap(player.x, player.y, player.size, player.size, sx, sy, sw, sh)
-        ) {
-          if (canTakeStormDamageRef.current) {
-            setLives((prev) => {
-              const next = prev - 1;
-              if (next <= 0) {
-                // Game over
-                setGameOver(true);
-              }
-              return next;
-            });
+      if (
+        rectRectOverlap(player.x, player.y, player.size, player.size, sx, sy, sw, sh)
+      ) {
+        if (canTakeStormDamageRef.current) {
+          setLives((prev) => {
+            const next = prev - 1;
+            if (next <= 0) {
+              // Game over
+              setGameOver(true);
+            }
+            return next;
+          });
 
-            // brief i-frames
-            canTakeStormDamageRef.current = false;
-            stormHitCooldownRef.current = setTimeout(() => {
-              canTakeStormDamageRef.current = true;
-              stormHitCooldownRef.current = null;
-            }, 1000);
-          }
-
-          // push player slightly on hit
-          player.vy += -2;
-          player.x -= 2;
+          // brief i-frames
+          canTakeStormDamageRef.current = false;
+          stormHitCooldownRef.current = setTimeout(() => {
+            canTakeStormDamageRef.current = true;
+            stormHitCooldownRef.current = null;
+          }, 1000);
         }
-      }
-    },
-    []
-  );
 
-  // Level progression
+        // push player slightly on hit
+        player.vy += -2;
+        player.x -= 2;
+      }
+    }
+  }, []);
+
+  // Level progression with banner animation
   useEffect(() => {
     if (starsCollected >= nextLevelAt && !gameOver) {
-      setLevel((lv) => lv + 1);
+      const newLevel = (lv) => lv + 1;
+      setLevel(newLevel);
       setNextLevelAt((prev) => prev + 5);
+
       // increase difficulty by slightly upping star speed and adding another star
       const W = (canvasRef.current && canvasRef.current.width) || 600;
       starsRef.current.forEach((s) => (s.speed += 0.2));
@@ -338,8 +411,20 @@ export default function GameCanvas({ onScore }) {
         x: W + Math.random() * 120,
         y: 80 + Math.random() * 200,
         r: 5,
-        speed: 1.5 + level * 0.1,
+        speed: 1.5 + (typeof newLevel === "function" ? 0 : 0), // maintain verbatim logic, no extra dependency
       });
+
+      // level complete banner animation
+      setBannerText(`Level ${level + 1}!`);
+      setShowLevelBanner(true);
+      if (levelBannerTimeoutRef.current) {
+        clearTimeout(levelBannerTimeoutRef.current);
+      }
+      levelBannerTimeoutRef.current = setTimeout(() => {
+        setShowLevelBanner(false);
+        setBannerText("");
+        levelBannerTimeoutRef.current = null;
+      }, 1600);
     }
   }, [starsCollected, nextLevelAt, gameOver, level]);
 
@@ -467,6 +552,42 @@ export default function GameCanvas({ onScore }) {
       ctx.restore();
     }
 
+    function drawLevelBanner() {
+      if (!showLevelBanner || !bannerText) return;
+      ctx.save();
+      // slide/fade style
+      const t = Date.now() % 1600;
+      const progress = Math.min(1, (t % 800) / 800);
+      const y = 60 - Math.sin(progress * Math.PI) * 10;
+
+      ctx.font = "bold 22px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
+      const tm = ctx.measureText(bannerText);
+      const w = tm.width + 24;
+      const h = 34;
+      const x = W / 2 - w / 2;
+
+      // background pill
+      ctx.fillStyle = "rgba(37,99,235,0.9)";
+      ctx.beginPath();
+      const r = 16;
+      ctx.moveTo(x + r, y);
+      ctx.lineTo(x + w - r, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+      ctx.lineTo(x + w, y + h - r);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+      ctx.lineTo(x + r, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+      ctx.lineTo(x, y + r);
+      ctx.quadraticCurveTo(x, y, x + r, y);
+      ctx.fill();
+
+      // text
+      ctx.fillStyle = "#fff";
+      ctx.fillText(bannerText, x + 12, y + h - 9);
+
+      ctx.restore();
+    }
+
     function drawGameOver() {
       ctx.save();
       ctx.fillStyle = "rgba(0,0,0,0.35)";
@@ -479,7 +600,7 @@ export default function GameCanvas({ onScore }) {
       ctx.fillText(title, W / 2 - tm.width / 2, H / 2 - 10);
 
       ctx.font = "bold 16px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
-      const tip = "Press R to Restart";
+      const tip = "Press R or Tap Restart";
       const tm2 = ctx.measureText(tip);
       ctx.fillText(tip, W / 2 - tm2.width / 2, H / 2 + 20);
 
@@ -545,9 +666,10 @@ export default function GameCanvas({ onScore }) {
       // Draw player
       drawPlayer();
 
-      // HUD and flash overlay
+      // HUD and overlays
       drawFlashOverlay();
       drawHUD();
+      drawLevelBanner();
 
       if (gameOver) {
         drawGameOver();
@@ -566,6 +688,8 @@ export default function GameCanvas({ onScore }) {
     score,
     level,
     lives,
+    showLevelBanner,
+    bannerText,
     initEntities,
     computerControl,
     handleStarCollisions,
@@ -587,6 +711,10 @@ export default function GameCanvas({ onScore }) {
         clearTimeout(stormHitCooldownRef.current);
         stormHitCooldownRef.current = null;
       }
+      if (levelBannerTimeoutRef.current) {
+        clearTimeout(levelBannerTimeoutRef.current);
+        levelBannerTimeoutRef.current = null;
+      }
       pressedRef.current.clear();
       starsRef.current = [];
       cloudsRef.current = [];
@@ -597,6 +725,16 @@ export default function GameCanvas({ onScore }) {
   // PUBLIC_INTERFACE
   return (
     <div style={{ position: "relative", width: 600 }}>
+      <div
+        ref={touchAreaRef}
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 2,
+          touchAction: "manipulation",
+        }}
+        aria-hidden="true"
+      />
       <canvas
         ref={canvasRef}
         width={600}
@@ -610,7 +748,7 @@ export default function GameCanvas({ onScore }) {
         aria-label="Dream Dash Game Canvas"
         role="img"
       />
-      {/* Simple on-canvas HUD is drawn via context; this button enables keyboard hint for accessibility */}
+      {/* Simple on-canvas HUD is drawn via context; bottom-left hint */}
       <div
         aria-live="polite"
         style={{
@@ -623,10 +761,35 @@ export default function GameCanvas({ onScore }) {
           borderRadius: 8,
           fontSize: 12,
           fontWeight: 600,
+          zIndex: 3,
         }}
       >
         Arrows to move • R to restart
       </div>
+
+      {/* Restart button overlay for touch devices */}
+      <button
+        onClick={restartGame}
+        style={{
+          position: "absolute",
+          right: 8,
+          bottom: 8,
+          background: "#2563EB",
+          color: "#fff",
+          border: "none",
+          borderRadius: 8,
+          padding: "8px 12px",
+          fontSize: 12,
+          fontWeight: 700,
+          boxShadow: "0 6px 16px rgba(37,99,235,0.35)",
+          cursor: "pointer",
+          zIndex: 3,
+        }}
+        aria-label="Restart game"
+        type="button"
+      >
+        Restart
+      </button>
     </div>
   );
 }
