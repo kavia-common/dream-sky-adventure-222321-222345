@@ -5,11 +5,19 @@ import GameCanvas from './components/GameCanvas';
 // PUBLIC_INTERFACE
 function App() {
   const [theme, setTheme] = useState('light');
+  const [score, setScore] = useState(0);
+  const [time, setTime] = useState(0);
 
   // Effect to apply theme to document element
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
+
+  // simple timer
+  useEffect(() => {
+    const id = setInterval(() => setTime(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   // PUBLIC_INTERFACE
   const toggleTheme = () => {
@@ -111,15 +119,15 @@ function App() {
             </span>
           </div>
           <div style={{ display: 'flex', gap: 12 }}>
-            <div style={statPill} aria-live="polite">Score: 0</div>
-            <div style={statPill} aria-live="polite">Time: 0s</div>
+            <div style={statPill} aria-live="polite">Score: {score}</div>
+            <div style={statPill} aria-live="polite">Time: {time}s</div>
           </div>
         </div>
       </header>
 
       <main style={contentStyle}>
         <div style={gameCardStyle} role="group" aria-label="Game area">
-          <GameCanvas />
+          <GameCanvas onScore={(increment = 1) => setScore(s => s + increment)} />
         </div>
       </main>
 

@@ -7,10 +7,11 @@ import { useEffect, useRef } from "react";
  * - Press Space to jump. AI controls storms and wind.
  * - This component sets up requestAnimationFrame and keyboard listeners with cleanup.
  */
-export default function GameCanvas() {
+export default function GameCanvas({ onScore }) {
   const canvasRef = useRef(null);
   const rafRef = useRef(null);
   const windTimeoutRef = useRef(null);
+  const flashTimeoutRef = useRef(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -37,6 +38,9 @@ export default function GameCanvas() {
     let clouds = [];
     let storms = [];
     let windForce = 0;
+
+    // visual feedback flag for star collection flash
+    let flashAlpha = 0;
 
     // create background gradient
     function drawBackground() {
@@ -104,6 +108,52 @@ export default function GameCanvas() {
       });
     }
 
+    // AABB (player rect) vs circle (star) collision detection
+    function rectCircleColliding(px, py, pw, ph, cx, cy, r) {
+      const closestX = Math.max(px, Math.min(cx, px + pw));
+      const closestY = Math.max(py, Math.min(cy, py + ph));
+      const dx = cx - closestX;
+      const dy = cy - closestY;
+      return dx * dx + dy * dy <= r * r;
+    }
+
+    // Handle player-star collisions: increment score and respawn star
+    function handleStarCollisions() {
+      for (let i = 0; i < stars.length; i++) {
+        const s = stars[i];
+        if (rectCircleColliding(player.x, player.y, player.size, player.size, s.x, s.y, s.r)) {
+          // callback to parent to increment score
+          if (typeof onScore === "function") {
+            onScore(1);
+          }
+          // flash effect
+          flashAlpha = 0.35;
+          if (flashTimeoutRef.current) {
+            clearTimeout(flashTimeoutRef.current);
+          }
+          // decay flash quickly
+          flashTimeoutRef.current = setTimeout(() => {
+            flashAlpha = 0;
+            flashTimeoutRef.current = null;
+          }, 120);
+
+          // respawn star offscreen right with new height
+          s.x = W + 40 + Math.random() * 200;
+          s.y = 80 + Math.random() * 200;
+        }
+      }
+    }
+
+    // render a subtle screen flash overlay to indicate collection
+    function drawFlashOverlay() {
+      if (flashAlpha > 0) {
+        ctx.fillStyle = `rgba(245, 158, 11, ${flashAlpha})`; // Ocean Professional amber accent
+        ctx.fillRect(0, 0, W, H);
+        // soft decay over frames
+        flashAlpha = Math.max(0, flashAlpha - 0.04);
+      }
+    }
+
     // ----- COMPUTER-CONTROLLED WEATHER (AI EVENTS) -----
     function computerControl() {
       // Randomly create new storms
@@ -140,13 +190,21 @@ export default function GameCanvas() {
       player.y += player.vy;
       player.x += windForce;
 
+      // ground
       if (player.y + player.size > 280) {
         player.y = 280 - player.size;
         player.vy = 0;
         player.grounded = true;
       }
 
+      // star collisions (+score + respawn)
+      handleStarCollisions();
+
       drawPlayer();
+
+      // overlay flash for collection feedback
+      drawFlashOverlay();
+
       rafRef.current = requestAnimationFrame(update);
     }
 
@@ -188,12 +246,16 @@ export default function GameCanvas() {
         clearTimeout(windTimeoutRef.current);
         windTimeoutRef.current = null;
       }
+      if (flashTimeoutRef.current) {
+        clearTimeout(flashTimeoutRef.current);
+        flashTimeoutRef.current = null;
+      }
       // Clear references
       stars = [];
       clouds = [];
       storms = [];
     };
-  }, []);
+  }, [onScore]);
 
   return (
     <canvas
