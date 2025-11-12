@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg width="160" height="16" viewBox="0 0 160 16" xmlns="http://www.w3.org/2000/svg">
-  <rect x="0" y="0" width="160" height="16" rx="8" fill="rgba(37,99,235,0.15)"/>
-  <rect x="2" y="2" width="80" height="12" rx="6" fill="#2563EB"/>
+<!-- Minimal valid SVG placeholder for a score bar -->
+<svg width="200" height="24" viewBox="0 0 200 24" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Score bar">
+  <rect x="1" y="1" width="198" height="22" rx="11" fill="#E5F0FF" stroke="#B9D4FF" stroke-width="2"/>
+  <rect x="3" y="3" width="120" height="18" rx="9" fill="#2563EB"/>
 </svg>

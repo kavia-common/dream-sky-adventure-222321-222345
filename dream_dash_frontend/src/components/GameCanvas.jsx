@@ -7,13 +7,14 @@ import stormImgSrc from "../assets/storm.png";
 
 /**
  * PUBLIC_INTERFACE
- * GameCanvas (stub)
- * Minimal canvas game loop that imports assets and renders:
- * - Stretched background
- * - Movable player (arrow keys)
- * - Drifting clouds
- * - Stars as collectibles (visual only here)
- * Assets are imported so future swaps don't require code changes.
+ * GameCanvas
+ * Robust 2D canvas loop with safe image preloading.
+ *
+ * - Preloads images with onload/onerror and Promise.allSettled
+ * - Starts render loop only after preload settles
+ * - Guards all drawImage calls against broken images (complete && naturalWidth > 0)
+ * - Provides canvas-based fallbacks if assets fail to load
+ * - Animated background, movable player, drifting clouds and stars
  */
 export default function GameCanvas({ onScore }) {
   const canvasRef = useRef(null);
@@ -22,47 +23,61 @@ export default function GameCanvas({ onScore }) {
   // keyboard state
   const pressed = useRef(new Set());
 
-  // simple state
-  const [ready, setReady] = useState(false);
+  // loading and asset state
+  const [assetsLoaded, setAssetsLoaded] = useState(false);
 
   // entities
   const player = useRef({ x: 100, y: 220, w: 28, h: 28, speed: 2.6 });
   const starsRef = useRef([]);
   const cloudsRef = useRef([]);
 
-  // load images via imports
+  // images store with status flags
   const imagesRef = useRef({
-    bg: new Image(),
-    player: new Image(),
-    star: new Image(),
-    cloud: new Image(),
-    storm: new Image(),
+    bg: { img: new Image(), ok: false },
+    player: { img: new Image(), ok: false },
+    star: { img: new Image(), ok: false },
+    cloud: { img: new Image(), ok: false },
+    storm: { img: new Image(), ok: false },
   });
 
+  // Helper: load one image with robust resolve
+  const loadImage = (img, src) =>
+    new Promise((resolve) => {
+      let settled = false;
+      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        if (settled) return;
+        settled = true;
+        resolve({ ok: true, width: img.naturalWidth, height: img.naturalHeight });
+      };
+      img.onerror = () => {
+        if (settled) return;
+        settled = true;
+        resolve({ ok: false, width: 0, height: 0 });
+      };
+      img.src = src;
+      // Safety timeout: if neither load nor error fires (rare), resolve as failed
+      setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          resolve({ ok: false, width: 0, height: 0 });
+        }
+      }, 8000);
+    });
+
+  // Preload images up front, gate the loop start
   useEffect(() => {
-    const imgs = imagesRef.current;
-    let loaded = 0;
-    const ALL = 5;
-
-    const onload = () => {
-      loaded += 1;
-      if (loaded >= ALL) setReady(true);
-    };
-
-    imgs.bg.onload = onload;
-    imgs.player.onload = onload;
-    imgs.star.onload = onload;
-    imgs.cloud.onload = onload;
-    imgs.storm.onload = onload;
-
-    imgs.bg.src = bgImgSrc;
-    imgs.player.src = playerImgSrc;
-    imgs.star.src = starImgSrc;
-    imgs.cloud.src = cloudImgSrc;
-    imgs.storm.src = stormImgSrc;
-
+    const { bg, player, star, cloud, storm } = imagesRef.current;
+    const tasks = [
+      loadImage(bg.img, bgImgSrc).then((r) => (bg.ok = r.ok)),
+      loadImage(player.img, playerImgSrc).then((r) => (player.ok = r.ok)),
+      loadImage(star.img, starImgSrc).then((r) => (star.ok = r.ok)),
+      loadImage(cloud.img, cloudImgSrc).then((r) => (cloud.ok = r.ok)),
+      loadImage(storm.img, stormImgSrc).then((r) => (storm.ok = r.ok)),
+    ];
+    Promise.allSettled(tasks).then(() => setAssetsLoaded(true));
     return () => {
-      // no cleanup needed for images
+      // No special cleanup for image elements
     };
   }, []);
 
@@ -72,6 +87,8 @@ export default function GameCanvas({ onScore }) {
     if (!c) return;
 
     const W = c.width;
+    const H = c.height;
+
     // stars
     starsRef.current = Array.from({ length: 8 }).map((_, i) => ({
       x: 80 + i * 70,
@@ -89,6 +106,9 @@ export default function GameCanvas({ onScore }) {
     // clamp player range
     player.current.maxX = W - player.current.w;
     player.current.minX = 0;
+
+    // clamp vertical based on canvas
+    player.current.y = Math.max(60, Math.min(H - player.current.h - 10, player.current.y));
   }, []);
 
   // keyboard input
@@ -110,36 +130,70 @@ export default function GameCanvas({ onScore }) {
     };
   }, []);
 
-  // main loop
+  // Validate an image is safe to draw
+  const canDraw = (imgObj) => {
+    if (!imgObj || !imgObj.img) return false;
+    const { img, ok } = imgObj;
+    // ok flag from loader plus DOM properties
+    return (
+      ok === true &&
+      img instanceof HTMLImageElement &&
+      img.complete === true &&
+      typeof img.naturalWidth === "number" &&
+      img.naturalWidth > 0
+    );
+    // if false, we will use fallbacks
+  };
+
+  // draw background gradient fallback
+  const drawBgFallback = (ctx, W, H) => {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#c0e8ff");
+    g.addColorStop(1, "#f5f7ff");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+  };
+
+  // main loop: starts only after assets have loaded/settled
   useEffect(() => {
     const c = canvasRef.current;
     if (!c) return;
     const ctx = c.getContext("2d");
     if (!ctx) return;
 
+    // Guard: wait until assetsLoaded to begin RAF
+    if (!assetsLoaded) return;
+
     const { bg, player: playerImg, star, cloud, storm } = imagesRef.current;
 
     const update = () => {
       const W = c.width;
       const H = c.height;
+      ctx.clearRect(0, 0, W, H);
 
-      // draw bg stretched
-      if (bg && bg.complete) {
-        ctx.drawImage(bg, 0, 0, W, H);
+      // draw bg stretched or fallback
+      if (canDraw(bg)) {
+        try {
+          ctx.drawImage(bg.img, 0, 0, W, H);
+        } catch {
+          drawBgFallback(ctx, W, H);
+        }
       } else {
-        // fallback gradient if not ready yet
-        const g = ctx.createLinearGradient(0, 0, 0, H);
-        g.addColorStop(0, "#c0e8ff");
-        g.addColorStop(1, "#f5f7ff");
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, W, H);
+        drawBgFallback(ctx, W, H);
       }
 
       // clouds drift
       cloudsRef.current.forEach((cl) => {
         const y = cl.y;
-        if (cloud && cloud.complete) {
-          ctx.drawImage(cloud, cl.x, y, 48, 24);
+        if (canDraw(cloud)) {
+          try {
+            ctx.drawImage(cloud.img, cl.x, y, 48, 24);
+          } catch {
+            ctx.fillStyle = "#fff";
+            ctx.beginPath();
+            ctx.ellipse(cl.x + 24, y + 12, 24, 12, 0, 0, Math.PI * 2);
+            ctx.fill();
+          }
         } else {
           ctx.fillStyle = "#fff";
           ctx.beginPath();
@@ -153,8 +207,15 @@ export default function GameCanvas({ onScore }) {
       // stars drift
       starsRef.current.forEach((s) => {
         const y = s.y;
-        if (star && star.complete) {
-          ctx.drawImage(star, s.x, y, 18, 18);
+        if (canDraw(star)) {
+          try {
+            ctx.drawImage(star.img, s.x, y, 18, 18);
+          } catch {
+            ctx.fillStyle = "#ffdf5d";
+            ctx.beginPath();
+            ctx.arc(s.x + 9, y + 9, 8, 0, Math.PI * 2);
+            ctx.fill();
+          }
         } else {
           ctx.fillStyle = "#ffdf5d";
           ctx.beginPath();
@@ -165,7 +226,7 @@ export default function GameCanvas({ onScore }) {
         if (s.x < -20) {
           s.x = W + Math.random() * 100;
           s.y = 90 + Math.random() * 120;
-          if (typeof onScore === "function") onScore(1); // simple scoring tick
+          if (typeof onScore === "function") onScore(1); // scoring tick
         }
       });
 
@@ -181,8 +242,13 @@ export default function GameCanvas({ onScore }) {
       p.y = Math.max(60, Math.min(H - p.h - 10, p.y));
 
       // draw player
-      if (playerImg && playerImg.complete) {
-        ctx.drawImage(playerImg, p.x, p.y, p.w, p.h);
+      if (canDraw(playerImg)) {
+        try {
+          ctx.drawImage(playerImg.img, p.x, p.y, p.w, p.h);
+        } catch {
+          ctx.fillStyle = "#ff7f7f";
+          ctx.fillRect(p.x, p.y, p.w, p.h);
+        }
       } else {
         ctx.fillStyle = "#ff7f7f";
         ctx.fillRect(p.x, p.y, p.w, p.h);
@@ -191,8 +257,15 @@ export default function GameCanvas({ onScore }) {
       // simple storm preview element at top-right
       const sx = W - 60;
       const sy = 20;
-      if (storm && storm.complete) {
-        ctx.drawImage(storm, sx, sy, 40, 24);
+      if (canDraw(storm)) {
+        try {
+          ctx.drawImage(storm.img, sx, sy, 40, 24);
+        } catch {
+          ctx.fillStyle = "#777";
+          ctx.beginPath();
+          ctx.ellipse(sx + 20, sy + 12, 20, 12, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
       } else {
         ctx.fillStyle = "#777";
         ctx.beginPath();
@@ -203,11 +276,13 @@ export default function GameCanvas({ onScore }) {
       rafRef.current = requestAnimationFrame(update);
     };
 
-    update();
+    // Kick off loop only after assetsLoaded
+    rafRef.current = requestAnimationFrame(update);
+
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [ready, onScore]);
+  }, [assetsLoaded, onScore]);
 
   // PUBLIC_INTERFACE
   return (
@@ -242,6 +317,26 @@ export default function GameCanvas({ onScore }) {
       >
         Use Arrow keys to move
       </div>
+      {!assetsLoaded && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: "absolute",
+            right: 8,
+            bottom: 8,
+            color: "#111827",
+            background: "rgba(17,24,39,0.06)",
+            padding: "6px 8px",
+            borderRadius: 8,
+            fontSize: 12,
+            fontWeight: 600,
+            zIndex: 3,
+          }}
+        >
+          Loading assets…
+        </div>
+      )}
     </div>
   );
 }
