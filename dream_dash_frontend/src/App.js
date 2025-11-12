@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
 import GameCanvas from './components/GameCanvas';
+import Game3D from './components/Game3D';
 
 // PUBLIC_INTERFACE
 function App() {
   const [theme, setTheme] = useState('light');
   const [score, setScore] = useState(0);
   const [time, setTime] = useState(0);
+  const [mode3D, setMode3D] = useState(false);
 
   // Effect to apply theme to document element
   useEffect(() => {
@@ -23,6 +25,10 @@ function App() {
   const toggleTheme = () => {
     setTheme(prevTheme => prevTheme === 'light' ? 'dark' : 'light');
   };
+
+  const toggleMode = () => {
+    setMode3D(m => !m);
+  }
 
   // Inline styles using Ocean Professional styleThemeData
   const colors = {
@@ -108,6 +114,21 @@ function App() {
     boxShadow: '0 6px 16px rgba(37,99,235,0.35)',
   };
 
+  const toggleButtonStyle = {
+    position: 'fixed',
+    bottom: 16,
+    left: 16,
+    backgroundColor: colors.secondary,
+    color: '#111827',
+    border: 'none',
+    borderRadius: 8,
+    padding: '10px 16px',
+    fontSize: 14,
+    fontWeight: 700,
+    cursor: 'pointer',
+    boxShadow: '0 6px 16px rgba(245,158,11,0.35)',
+  };
+
   return (
     <div className="App" style={appContainerStyle}>
       <header style={headerStyle}>
@@ -121,13 +142,20 @@ function App() {
           <div style={{ display: 'flex', gap: 12 }}>
             <div style={statPill} aria-live="polite">Score: {score}</div>
             <div style={statPill} aria-live="polite">Time: {time}s</div>
+            <div style={{ ...statPill, background: 'rgba(17,24,39,0.08)', color: colors.text }}>
+              Mode: {mode3D ? '3D' : '2D'}
+            </div>
           </div>
         </div>
       </header>
 
       <main style={contentStyle}>
         <div style={gameCardStyle} role="group" aria-label="Game area">
-          <GameCanvas onScore={(increment = 1) => setScore(s => s + increment)} />
+          {mode3D ? (
+            <Game3D onScore={(increment = 1) => setScore(s => s + increment)} />
+          ) : (
+            <GameCanvas onScore={(increment = 1) => setScore(s => s + increment)} />
+          )}
         </div>
       </main>
 
@@ -138,6 +166,14 @@ function App() {
         aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`}
       >
         {theme === 'light' ? '🌙 Dark' : '☀️ Light'}
+      </button>
+
+      <button
+        style={toggleButtonStyle}
+        onClick={toggleMode}
+        aria-label={`Switch to ${mode3D ? '2D' : '3D'} mode`}
+      >
+        {mode3D ? 'Switch to 2D' : 'Try 3D Beta'}
       </button>
     </div>
   );
