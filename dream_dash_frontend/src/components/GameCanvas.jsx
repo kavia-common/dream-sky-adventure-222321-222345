@@ -1,740 +1,217 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import bgImgSrc from "../assets/bg.png";
+import playerImgSrc from "../assets/player.png";
+import starImgSrc from "../assets/star.png";
+import cloudImgSrc from "../assets/cloud.png";
+import stormImgSrc from "../assets/storm.png";
 
 /**
  * PUBLIC_INTERFACE
- * GameCanvas v3
- * Full user-provided implementation:
- * - State: gameOver, level, score, lives, starsCollected, nextLevelAt
- * - Controls: Arrow keys, continuous movement, R to restart
- * - AI environment: storms, wind, clouds
- * - Collisions: storms (damage), stars (collect to progress)
- * - HUD with score, level, lives, and game over overlay
- * - Level-complete banner animation and subtle UI hints
- * - Touch controls and restart button overlay for accessibility
- * - Proper event listener and timer cleanup
+ * GameCanvas (stub)
+ * Minimal canvas game loop that imports assets and renders:
+ * - Stretched background
+ * - Movable player (arrow keys)
+ * - Drifting clouds
+ * - Stars as collectibles (visual only here)
+ * Assets are imported so future swaps don't require code changes.
  */
 export default function GameCanvas({ onScore }) {
   const canvasRef = useRef(null);
   const rafRef = useRef(null);
 
-  // Timers/timeouts refs for cleanup
-  const windTimeoutRef = useRef(null);
-  const flashTimeoutRef = useRef(null);
-  const stormHitCooldownRef = useRef(null);
-  const levelBannerTimeoutRef = useRef(null);
+  // keyboard state
+  const pressed = useRef(new Set());
 
-  // Game state
-  const [score, setScore] = useState(0);
-  const [level, setLevel] = useState(1);
-  const [lives, setLives] = useState(3);
-  const [starsCollected, setStarsCollected] = useState(0);
-  const [nextLevelAt, setNextLevelAt] = useState(5);
-  const [gameOver, setGameOver] = useState(false);
+  // simple state
+  const [ready, setReady] = useState(false);
 
-  // Level complete animation state
-  const [showLevelBanner, setShowLevelBanner] = useState(false);
-  const [bannerText, setBannerText] = useState("");
-
-  // Local effect flags/state
-  const pressedRef = useRef(new Set());
-  const lastDownImpulseAtRef = useRef(0);
-  const canTakeStormDamageRef = useRef(true);
-
-  // World entities
+  // entities
+  const player = useRef({ x: 100, y: 220, w: 28, h: 28, speed: 2.6 });
   const starsRef = useRef([]);
   const cloudsRef = useRef([]);
-  const stormsRef = useRef([]);
 
-  // Sim variables
-  const windForceRef = useRef(0);
-  const flashAlphaRef = useRef(0);
-
-  // Player object kept in a ref so it persists across renders without causing re-renders
-  const playerRef = useRef({
-    x: 100,
-    y: 250,
-    size: 30,
-    vy: 0,
-    gravity: 0.8,
-    jumpPower: -12,
-    grounded: true,
-    speed: 2.5,
-    maxX: 600 - 30, // will update after canvas mount
-    minX: 0,
-    ceilingY: 10,
+  // load images via imports
+  const imagesRef = useRef({
+    bg: new Image(),
+    player: new Image(),
+    star: new Image(),
+    cloud: new Image(),
+    storm: new Image(),
   });
 
-  // PUBLIC_INTERFACE
-  const restartGame = useCallback(() => {
-    // Reset game state
-    setScore(0);
-    setLevel(1);
-    setLives(3);
-    setStarsCollected(0);
-    setNextLevelAt(5);
-    setGameOver(false);
-    setShowLevelBanner(false);
-    setBannerText("");
-
-    // Reset world
-    starsRef.current = [];
-    cloudsRef.current = [];
-    stormsRef.current = [];
-    windForceRef.current = 0;
-    flashAlphaRef.current = 0;
-
-    // Reset inputs and cooldowns
-    pressedRef.current.clear();
-    canTakeStormDamageRef.current = true;
-    if (stormHitCooldownRef.current) {
-      clearTimeout(stormHitCooldownRef.current);
-      stormHitCooldownRef.current = null;
-    }
-    if (levelBannerTimeoutRef.current) {
-      clearTimeout(levelBannerTimeoutRef.current);
-      levelBannerTimeoutRef.current = null;
-    }
-
-    // Reset player
-    const canvas = canvasRef.current;
-    const W = (canvas && canvas.width) || 600;
-    playerRef.current = {
-      x: 100,
-      y: 250,
-      size: 30,
-      vy: 0,
-      gravity: 0.8,
-      jumpPower: -12,
-      grounded: true,
-      speed: 2.5,
-      maxX: W - 30,
-      minX: 0,
-      ceilingY: 10,
-    };
-
-    // Reinit entities
-    initEntities();
-  }, []);
-
-  // Initialize clouds and stars
-  const initEntities = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const W = canvas.width;
-
-    // Clouds
-    const clouds = [];
-    for (let i = 0; i < 8; i++) {
-      clouds.push({
-        x: i * 100,
-        y: 220 + Math.random() * 30,
-        w: 50,
-        h: 20,
-        speed: 0.5,
-      });
-    }
-    cloudsRef.current = clouds;
-
-    // Stars
-    const stars = [];
-    for (let i = 0; i < 10; i++) {
-      stars.push({
-        x: i * 80 + 100,
-        y: 100 + Math.random() * 100,
-        r: 5,
-        speed: 1.5,
-      });
-    }
-    starsRef.current = stars;
-
-    // Storms start empty and spawn via AI
-    stormsRef.current = [];
-
-    // Reset wind and flash
-    windForceRef.current = 0;
-    flashAlphaRef.current = 0;
-  }, []);
-
-  // Input handlers (keyboard)
   useEffect(() => {
-    const onKeyDown = (e) => {
-      if (
-        e.key === "ArrowUp" ||
-        e.key === "ArrowDown" ||
-        e.key === "ArrowLeft" ||
-        e.key === "ArrowRight"
-      ) {
-        e.preventDefault();
-        pressedRef.current.add(e.key);
-      }
+    const imgs = imagesRef.current;
+    let loaded = 0;
+    const ALL = 5;
 
-      if (e.key === "r" || e.key === "R") {
-        // Restart when game over, or anytime per request
-        restartGame();
-        return;
-      }
-
-      const player = playerRef.current;
-      if (e.key === "ArrowUp") {
-        if (player.grounded) {
-          player.vy = player.jumpPower;
-          player.grounded = false;
-        } else {
-          player.vy += -0.8;
-        }
-      }
-
-      if (e.key === "ArrowDown") {
-        const now = Date.now();
-        if (now - lastDownImpulseAtRef.current > 120) {
-          player.vy += 3.2;
-          lastDownImpulseAtRef.current = now;
-        }
-      }
+    const onload = () => {
+      loaded += 1;
+      if (loaded >= ALL) setReady(true);
     };
 
-    const onKeyUp = (e) => {
-      if (
-        e.key === "ArrowUp" ||
-        e.key === "ArrowDown" ||
-        e.key === "ArrowLeft" ||
-        e.key === "ArrowRight"
-      ) {
-        e.preventDefault();
-        if (pressedRef.current.has(e.key)) {
-          pressedRef.current.delete(e.key);
-        }
-      }
-    };
+    imgs.bg.onload = onload;
+    imgs.player.onload = onload;
+    imgs.star.onload = onload;
+    imgs.cloud.onload = onload;
+    imgs.storm.onload = onload;
 
-    window.addEventListener("keydown", onKeyDown, { passive: false });
-    window.addEventListener("keyup", onKeyUp, { passive: false });
+    imgs.bg.src = bgImgSrc;
+    imgs.player.src = playerImgSrc;
+    imgs.star.src = starImgSrc;
+    imgs.cloud.src = cloudImgSrc;
+    imgs.storm.src = stormImgSrc;
 
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
+      // no cleanup needed for images
     };
-  }, [restartGame]);
+  }, []);
 
-  // Touch controls (mobile-friendly)
-  const touchAreaRef = useRef(null);
+  // init entities after canvas mounted
   useEffect(() => {
-    const el = touchAreaRef.current;
-    if (!el) return;
+    const c = canvasRef.current;
+    if (!c) return;
 
-    let touchStartX = null;
+    const W = c.width;
+    // stars
+    starsRef.current = Array.from({ length: 8 }).map((_, i) => ({
+      x: 80 + i * 70,
+      y: 90 + Math.random() * 120,
+      speed: 1.2 + Math.random() * 0.5,
+    }));
 
-    const onTouchStart = (e) => {
-      const rect = el.getBoundingClientRect();
-      const x = e.touches[0].clientX - rect.left;
-      const y = e.touches[0].clientY - rect.top;
-      touchStartX = x;
+    // clouds
+    cloudsRef.current = Array.from({ length: 6 }).map((_, i) => ({
+      x: i * 110,
+      y: 40 + Math.random() * 70,
+      speed: 0.4 + Math.random() * 0.3,
+    }));
 
-      // simple regions: left/right halves for horizontal, top area for jump
-      const width = rect.width;
-      const height = rect.height;
+    // clamp player range
+    player.current.maxX = W - player.current.w;
+    player.current.minX = 0;
+  }, []);
 
-      if (y < height * 0.6) {
-        // jump
-        const player = playerRef.current;
-        if (player.grounded) {
-          player.vy = player.jumpPower;
-          player.grounded = false;
-        } else {
-          player.vy += -0.8;
-        }
-      } else {
-        if (x < width / 2) {
-          pressedRef.current.add("ArrowLeft");
-        } else {
-          pressedRef.current.add("ArrowRight");
-        }
+  // keyboard input
+  useEffect(() => {
+    const down = (e) => {
+      if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+        e.preventDefault();
+        pressed.current.add(e.key);
       }
     };
-
-    const onTouchMove = (e) => {
-      // optional: could implement swipe down to dive
-      // for simplicity, ignore continuous changes here
+    const up = (e) => {
+      if (pressed.current.has(e.key)) pressed.current.delete(e.key);
     };
-
-    const onTouchEnd = () => {
-      pressedRef.current.delete("ArrowLeft");
-      pressedRef.current.delete("ArrowRight");
-      touchStartX = null;
-    };
-
-    el.addEventListener("touchstart", onTouchStart, { passive: true });
-    el.addEventListener("touchmove", onTouchMove, { passive: true });
-    el.addEventListener("touchend", onTouchEnd, { passive: true });
-
+    window.addEventListener("keydown", down, { passive: false });
+    window.addEventListener("keyup", up, { passive: false });
     return () => {
-      el.removeEventListener("touchstart", onTouchStart);
-      el.removeEventListener("touchmove", onTouchMove);
-      el.removeEventListener("touchend", onTouchEnd);
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
     };
   }, []);
 
-  // Utility: collision checks
-  function rectCircleColliding(px, py, pw, ph, cx, cy, r) {
-    const closestX = Math.max(px, Math.min(cx, px + pw));
-    const closestY = Math.max(py, Math.min(cy, py + ph));
-    const dx = cx - closestX;
-    const dy = cy - closestY;
-    return dx * dx + dy * dy <= r * r;
-  }
-
-  function rectRectOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
-    return ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
-  }
-
-  // AI computer control
-  const computerControl = useCallback(
-    (W) => {
-      // Spawn new storms occasionally; scale with level slightly
-      const maxStorms = Math.min(2 + Math.floor(level / 2), 5);
-      if (Math.random() < 0.01 && stormsRef.current.length < maxStorms) {
-        stormsRef.current.push({
-          x: W,
-          y: 80 + Math.random() * 120,
-          speed: 1.6 + Math.random() * 0.8 + level * 0.1,
-        });
-      }
-
-      // Random wind gusts
-      if (Math.random() < 0.002) {
-        windForceRef.current = (Math.random() - 0.5) * (2 + level * 0.2);
-        if (windTimeoutRef.current) clearTimeout(windTimeoutRef.current);
-        windTimeoutRef.current = setTimeout(() => {
-          windForceRef.current = 0;
-          windTimeoutRef.current = null;
-        }, 2000);
-      }
-    },
-    [level]
-  );
-
-  // Handle star collection
-  const handleStarCollisions = useCallback(
-    (W) => {
-      const player = playerRef.current;
-      const stars = starsRef.current;
-
-      for (let i = 0; i < stars.length; i++) {
-        const s = stars[i];
-        if (
-          rectCircleColliding(
-            player.x,
-            player.y,
-            player.size,
-            player.size,
-            s.x,
-            s.y,
-            s.r
-          )
-        ) {
-          // Update score and HUD
-          setScore((prev) => prev + 1);
-          setStarsCollected((prev) => prev + 1);
-          if (typeof onScore === "function") {
-            onScore(1);
-          }
-
-          // Flash effect
-          flashAlphaRef.current = 0.35;
-          if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
-          flashTimeoutRef.current = setTimeout(() => {
-            flashAlphaRef.current = 0;
-            flashTimeoutRef.current = null;
-          }, 120);
-
-          // Respawn star
-          s.x = W + 40 + Math.random() * 200;
-          s.y = 80 + Math.random() * 200;
-        }
-      }
-    },
-    [onScore]
-  );
-
-  // Handle storm collisions (damage)
-  const handleStormCollisions = useCallback((W) => {
-    const player = playerRef.current;
-    const storms = stormsRef.current;
-
-    for (let i = 0; i < storms.length; i++) {
-      const st = storms[i];
-      // Storm visual approx: ellipse radius 40x20 -> bounding rect
-      const sx = st.x - 40;
-      const sy = st.y - 20;
-      const sw = 80;
-      const sh = 40;
-
-      if (
-        rectRectOverlap(player.x, player.y, player.size, player.size, sx, sy, sw, sh)
-      ) {
-        if (canTakeStormDamageRef.current) {
-          setLives((prev) => {
-            const next = prev - 1;
-            if (next <= 0) {
-              // Game over
-              setGameOver(true);
-            }
-            return next;
-          });
-
-          // brief i-frames
-          canTakeStormDamageRef.current = false;
-          stormHitCooldownRef.current = setTimeout(() => {
-            canTakeStormDamageRef.current = true;
-            stormHitCooldownRef.current = null;
-          }, 1000);
-        }
-
-        // push player slightly on hit
-        player.vy += -2;
-        player.x -= 2;
-      }
-    }
-  }, []);
-
-  // Level progression with banner animation
+  // main loop
   useEffect(() => {
-    if (starsCollected >= nextLevelAt && !gameOver) {
-      const newLevel = (lv) => lv + 1;
-      setLevel(newLevel);
-      setNextLevelAt((prev) => prev + 5);
-
-      // increase difficulty by slightly upping star speed and adding another star
-      const W = (canvasRef.current && canvasRef.current.width) || 600;
-      starsRef.current.forEach((s) => (s.speed += 0.2));
-      starsRef.current.push({
-        x: W + Math.random() * 120,
-        y: 80 + Math.random() * 200,
-        r: 5,
-        speed: 1.5 + (typeof newLevel === "function" ? 0 : 0), // maintain verbatim logic, no extra dependency
-      });
-
-      // level complete banner animation
-      setBannerText(`Level ${level + 1}!`);
-      setShowLevelBanner(true);
-      if (levelBannerTimeoutRef.current) {
-        clearTimeout(levelBannerTimeoutRef.current);
-      }
-      levelBannerTimeoutRef.current = setTimeout(() => {
-        setShowLevelBanner(false);
-        setBannerText("");
-        levelBannerTimeoutRef.current = null;
-      }, 1600);
-    }
-  }, [starsCollected, nextLevelAt, gameOver, level]);
-
-  // Main game loop
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
+    const c = canvasRef.current;
+    if (!c) return;
+    const ctx = c.getContext("2d");
     if (!ctx) return;
 
-    const W = canvas.width;
-    const H = canvas.height;
-    playerRef.current.maxX = W - playerRef.current.size;
-
-    // Draw helpers
-    function drawBackground() {
-      const grad = ctx.createLinearGradient(0, 0, 0, H);
-      grad.addColorStop(0, "#c0e8ff");
-      grad.addColorStop(1, "#f5f7ff");
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, W, H);
-    }
-
-    function drawClouds() {
-      ctx.fillStyle = "#fff";
-      const clouds = cloudsRef.current;
-      clouds.forEach((c) => {
-        ctx.beginPath();
-        ctx.ellipse(c.x, c.y, c.w, c.h, 0, 0, Math.PI * 2);
-        ctx.fill();
-        c.x -= c.speed;
-        if (c.x + c.w < 0) c.x = W + Math.random() * 200;
-      });
-    }
-
-    function drawStars() {
-      ctx.fillStyle = "#ffdf5d";
-      const stars = starsRef.current;
-      stars.forEach((s) => {
-        ctx.beginPath();
-        ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-        ctx.fill();
-        s.x -= s.speed;
-        if (s.x + s.r < 0) {
-          s.x = W + Math.random() * 200;
-          s.y = 80 + Math.random() * 200;
-        }
-      });
-    }
-
-    function drawPlayer() {
-      const p = playerRef.current;
-      ctx.fillStyle = "#ff7f7f";
-      ctx.fillRect(p.x, p.y, p.size, p.size);
-    }
-
-    function drawStorms() {
-      const storms = stormsRef.current;
-      storms.forEach((s) => {
-        // cloud
-        ctx.fillStyle = "#777";
-        ctx.beginPath();
-        ctx.ellipse(s.x, s.y, 40, 20, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // lightning flash effect
-        if (Math.random() < 0.01) {
-          ctx.strokeStyle = "#ffef88";
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(s.x, s.y);
-          ctx.lineTo(s.x + (Math.random() * 20 - 10), s.y + 50);
-          ctx.stroke();
-        }
-
-        s.x -= s.speed;
-        if (s.x + 40 < 0) s.x = W + Math.random() * 200;
-      });
-    }
-
-    function drawFlashOverlay() {
-      const alpha = flashAlphaRef.current;
-      if (alpha > 0) {
-        ctx.fillStyle = `rgba(245, 158, 11, ${alpha})`;
-        ctx.fillRect(0, 0, W, H);
-        flashAlphaRef.current = Math.max(0, alpha - 0.04);
-      }
-    }
-
-    function drawHUD() {
-      ctx.save();
-      ctx.font = "bold 14px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
-      ctx.fillStyle = "#111827";
-
-      const pill = (text, x, y, colorBg, colorText = "#111827") => {
-        ctx.font = "bold 14px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
-        const paddingX = 10;
-        const paddingY = 6;
-        const tm = ctx.measureText(text);
-        const w = tm.width + paddingX * 2;
-        const h = 24;
-
-        ctx.fillStyle = colorBg;
-        ctx.beginPath();
-        const r = 12;
-        ctx.moveTo(x + r, y);
-        ctx.lineTo(x + w - r, y);
-        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-        ctx.lineTo(x + w, y + h - r);
-        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-        ctx.lineTo(x + r, y + h);
-        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-        ctx.lineTo(x, y + r);
-        ctx.quadraticCurveTo(x, y, x + r, y);
-        ctx.fill();
-
-        ctx.fillStyle = colorText;
-        ctx.fillText(text, x + paddingX, y + h - 7);
-      };
-
-      pill(`Score: ${score}`, 12, 10, "rgba(37,99,235,0.08)", "#2563EB");
-      pill(`Level: ${level}`, 120, 10, "rgba(245,158,11,0.12)", "#F59E0B");
-      pill(`Lives: ${lives}`, 220, 10, "rgba(17,24,39,0.08)", "#111827");
-
-      ctx.restore();
-    }
-
-    function drawLevelBanner() {
-      if (!showLevelBanner || !bannerText) return;
-      ctx.save();
-      // slide/fade style
-      const t = Date.now() % 1600;
-      const progress = Math.min(1, (t % 800) / 800);
-      const y = 60 - Math.sin(progress * Math.PI) * 10;
-
-      ctx.font = "bold 22px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
-      const tm = ctx.measureText(bannerText);
-      const w = tm.width + 24;
-      const h = 34;
-      const x = W / 2 - w / 2;
-
-      // background pill
-      ctx.fillStyle = "rgba(37,99,235,0.9)";
-      ctx.beginPath();
-      const r = 16;
-      ctx.moveTo(x + r, y);
-      ctx.lineTo(x + w - r, y);
-      ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-      ctx.lineTo(x + w, y + h - r);
-      ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-      ctx.lineTo(x + r, y + h);
-      ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-      ctx.lineTo(x, y + r);
-      ctx.quadraticCurveTo(x, y, x + r, y);
-      ctx.fill();
-
-      // text
-      ctx.fillStyle = "#fff";
-      ctx.fillText(bannerText, x + 12, y + h - 9);
-
-      ctx.restore();
-    }
-
-    function drawGameOver() {
-      ctx.save();
-      ctx.fillStyle = "rgba(0,0,0,0.35)";
-      ctx.fillRect(0, 0, W, H);
-
-      ctx.fillStyle = "#ffffff";
-      ctx.font = "bold 28px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
-      const title = "Game Over";
-      const tm = ctx.measureText(title);
-      ctx.fillText(title, W / 2 - tm.width / 2, H / 2 - 10);
-
-      ctx.font = "bold 16px system-ui, -apple-system, Segoe UI, Roboto, sans-serif";
-      const tip = "Press R or Tap Restart";
-      const tm2 = ctx.measureText(tip);
-      ctx.fillText(tip, W / 2 - tm2.width / 2, H / 2 + 20);
-
-      ctx.restore();
-    }
-
-    // Ensure entities exist (initial mount or after restart)
-    if (starsRef.current.length === 0 && cloudsRef.current.length === 0) {
-      initEntities();
-    }
+    const { bg, player: playerImg, star, cloud, storm } = imagesRef.current;
 
     const update = () => {
-      ctx.clearRect(0, 0, W, H);
-      drawBackground();
+      const W = c.width;
+      const H = c.height;
 
-      // Draw/update world
-      computerControl(W);
-      drawClouds();
-      drawStars();
-      drawStorms();
-
-      const player = playerRef.current;
-
-      // Player movement
-      const pressed = pressedRef.current;
-      if (pressed.has("ArrowLeft")) player.x -= player.speed;
-      if (pressed.has("ArrowRight")) player.x += player.speed;
-
-      // Clamp X
-      if (player.x < player.minX) player.x = player.minX;
-      if (player.x > player.maxX) player.x = player.maxX;
-
-      // Physics: gravity + wind
-      player.vy += player.gravity;
-      player.y += player.vy;
-      player.x += windForceRef.current;
-
-      // Clamp X after wind
-      if (player.x < player.minX) player.x = player.minX;
-      if (player.x > player.maxX) player.x = player.maxX;
-
-      // Ceiling
-      if (player.y < player.ceilingY) {
-        player.y = player.ceilingY;
-        if (player.vy < 0) player.vy = 0;
-      }
-
-      // Ground
-      if (player.y + player.size > 280) {
-        player.y = 280 - player.size;
-        player.vy = 0;
-        player.grounded = true;
+      // draw bg stretched
+      if (bg && bg.complete) {
+        ctx.drawImage(bg, 0, 0, W, H);
       } else {
-        player.grounded = false;
+        // fallback gradient if not ready yet
+        const g = ctx.createLinearGradient(0, 0, 0, H);
+        g.addColorStop(0, "#c0e8ff");
+        g.addColorStop(1, "#f5f7ff");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, W, H);
       }
 
-      // Collisions
-      if (!gameOver) {
-        handleStarCollisions(W);
-        handleStormCollisions(W);
+      // clouds drift
+      cloudsRef.current.forEach((cl) => {
+        const y = cl.y;
+        if (cloud && cloud.complete) {
+          ctx.drawImage(cloud, cl.x, y, 48, 24);
+        } else {
+          ctx.fillStyle = "#fff";
+          ctx.beginPath();
+          ctx.ellipse(cl.x + 24, y + 12, 24, 12, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        cl.x -= cl.speed;
+        if (cl.x < -60) cl.x = W + Math.random() * 120;
+      });
+
+      // stars drift
+      starsRef.current.forEach((s) => {
+        const y = s.y;
+        if (star && star.complete) {
+          ctx.drawImage(star, s.x, y, 18, 18);
+        } else {
+          ctx.fillStyle = "#ffdf5d";
+          ctx.beginPath();
+          ctx.arc(s.x + 9, y + 9, 8, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        s.x -= s.speed;
+        if (s.x < -20) {
+          s.x = W + Math.random() * 100;
+          s.y = 90 + Math.random() * 120;
+          if (typeof onScore === "function") onScore(1); // simple scoring tick
+        }
+      });
+
+      // player control
+      const p = player.current;
+      if (pressed.current.has("ArrowLeft")) p.x -= p.speed;
+      if (pressed.current.has("ArrowRight")) p.x += p.speed;
+      if (pressed.current.has("ArrowUp")) p.y -= p.speed;
+      if (pressed.current.has("ArrowDown")) p.y += p.speed;
+
+      // clamps
+      p.x = Math.max(p.minX ?? 0, Math.min(p.maxX ?? W - p.w, p.x));
+      p.y = Math.max(60, Math.min(H - p.h - 10, p.y));
+
+      // draw player
+      if (playerImg && playerImg.complete) {
+        ctx.drawImage(playerImg, p.x, p.y, p.w, p.h);
+      } else {
+        ctx.fillStyle = "#ff7f7f";
+        ctx.fillRect(p.x, p.y, p.w, p.h);
       }
 
-      // Draw player
-      drawPlayer();
-
-      // HUD and overlays
-      drawFlashOverlay();
-      drawHUD();
-      drawLevelBanner();
-
-      if (gameOver) {
-        drawGameOver();
+      // simple storm preview element at top-right
+      const sx = W - 60;
+      const sy = 20;
+      if (storm && storm.complete) {
+        ctx.drawImage(storm, sx, sy, 40, 24);
+      } else {
+        ctx.fillStyle = "#777";
+        ctx.beginPath();
+        ctx.ellipse(sx + 20, sy + 12, 20, 12, 0, 0, Math.PI * 2);
+        ctx.fill();
       }
 
       rafRef.current = requestAnimationFrame(update);
     };
 
     update();
-
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [
-    gameOver,
-    score,
-    level,
-    lives,
-    showLevelBanner,
-    bannerText,
-    initEntities,
-    computerControl,
-    handleStarCollisions,
-    handleStormCollisions,
-  ]);
-
-  // Cleanup for timers on unmount
-  useEffect(() => {
-    return () => {
-      if (windTimeoutRef.current) {
-        clearTimeout(windTimeoutRef.current);
-        windTimeoutRef.current = null;
-      }
-      if (flashTimeoutRef.current) {
-        clearTimeout(flashTimeoutRef.current);
-        flashTimeoutRef.current = null;
-      }
-      if (stormHitCooldownRef.current) {
-        clearTimeout(stormHitCooldownRef.current);
-        stormHitCooldownRef.current = null;
-      }
-      if (levelBannerTimeoutRef.current) {
-        clearTimeout(levelBannerTimeoutRef.current);
-        levelBannerTimeoutRef.current = null;
-      }
-      pressedRef.current.clear();
-      starsRef.current = [];
-      cloudsRef.current = [];
-      stormsRef.current = [];
-    };
-  }, []);
+  }, [ready, onScore]);
 
   // PUBLIC_INTERFACE
   return (
     <div style={{ position: "relative", width: 600 }}>
-      <div
-        ref={touchAreaRef}
-        style={{
-          position: "absolute",
-          inset: 0,
-          zIndex: 2,
-          touchAction: "manipulation",
-        }}
-        aria-hidden="true"
-      />
       <canvas
         ref={canvasRef}
         width={600}
@@ -748,7 +225,6 @@ export default function GameCanvas({ onScore }) {
         aria-label="Dream Dash Game Canvas"
         role="img"
       />
-      {/* Simple on-canvas HUD is drawn via context; bottom-left hint */}
       <div
         aria-live="polite"
         style={{
@@ -764,32 +240,8 @@ export default function GameCanvas({ onScore }) {
           zIndex: 3,
         }}
       >
-        Arrows to move • R to restart
+        Use Arrow keys to move
       </div>
-
-      {/* Restart button overlay for touch devices */}
-      <button
-        onClick={restartGame}
-        style={{
-          position: "absolute",
-          right: 8,
-          bottom: 8,
-          background: "#2563EB",
-          color: "#fff",
-          border: "none",
-          borderRadius: 8,
-          padding: "8px 12px",
-          fontSize: 12,
-          fontWeight: 700,
-          boxShadow: "0 6px 16px rgba(37,99,235,0.35)",
-          cursor: "pointer",
-          zIndex: 3,
-        }}
-        aria-label="Restart game"
-        type="button"
-      >
-        Restart
-      </button>
     </div>
   );
 }
